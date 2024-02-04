@@ -1,15 +1,10 @@
-try:
-    from fuzzywuzzy import process
-except ImportError:
-    !pip install fuzzywuzzy
-    from fuzzywuzzy import process
-
 import numpy as np
 from sklearn.linear_model import LinearRegression
 import requests
 import xgboost as xgb
 import pandas as pd
 from tabulate import tabulate
+from fuzzywuzzy import process
 
 
 # Set API endpoint URL and API key for OddsData
