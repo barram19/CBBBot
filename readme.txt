@@ -20,3 +20,7 @@ An 'Over_Under' column is added, indicating whether the prediction is over or un
   Time Handling:
 Current UTC time is obtained and converted to Central Standard Time (CST).
 Commence times are also converted to CST for better readability.
+
+  Performance Tracking:
+The code uses googlesheets API to export the prediction results to a google sheet for performance tracking purposes. 
+It includes a duplicate check so that the google sheet does not become overloaded with duplicate game data
