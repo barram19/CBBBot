@@ -2,14 +2,38 @@ try:
     from fuzzywuzzy import process
 except ImportError:
     !pip install fuzzywuzzy
-    
+    from fuzzywuzzy import process
+
+!pip install pandas
+
 import numpy as np
 from sklearn.linear_model import LinearRegression
 import requests
 import xgboost as xgb
 import pandas as pd
 from tabulate import tabulate
-from fuzzywuzzy import process
+
+import pytz
+from datetime import datetime, timezone
+
+# Specify the name of the uploaded Excel file
+excel_file_name = 'CBB_Teams.xlsx'
+
+# Function to read the team name mapping from an Excel file
+def read_team_mapping(file_name):
+    team_mapping = pd.read_excel(file_name)
+    return team_mapping
+
+# Read team name mapping from the Excel file in Google Colab
+team_mapping = read_team_mapping(excel_file_name)
+
+# Function to find the standardized team name from the Excel file
+def find_standardized_name(team_name, team_mapping):
+    match = team_mapping.loc[team_mapping['TeamName'] == team_name, 'StandardizedTeamName'].values
+    if len(match) > 0:
+        return match[0]
+    else:
+        return None
 
 
 # Set API endpoint URL and API key for OddsData
@@ -33,7 +57,7 @@ if response.status_code == 200:
     for game in odds_data:
         home_team = game['home_team']
         away_team = game['away_team']
-        commence_time = game['commence_time'][:10]  # Extract the date from the commence_time field
+        commence_time = game['commence_time']
         bookmakers = game['bookmakers']
         for bookmaker in bookmakers:
             markets = bookmaker['markets']
@@ -63,25 +87,17 @@ if response.status_code == 200:
     columns = ['home_team', 'away_team', 'commence_time', 'home_odds', 'away_odds', 'point', 'over_odds', 'under_odds']
     df = pd.DataFrame(game_data, columns=columns)
 
-    # Function to find the best match for a team name using fuzzy matching
-    def find_best_match(team_name, options):
-        match_info = process.extractOne(team_name, options)
-        if match_info[1] >= 90:  # Adjust the threshold as needed
-            return match_info[0]
-        else:
-            return None
-
-    # Match team names in odds data with average scoring data
-    df['matched_home_team'] = df['home_team'].apply(lambda x: find_best_match(x, df_points_for['Team']))
-    df['matched_away_team'] = df['away_team'].apply(lambda x: find_best_match(x, df_points_for['Team']))
+    # Match team names in odds data with average scoring data using the Excel file
+    df['matched_home_team'] = df['home_team'].apply(lambda x: find_standardized_name(x, team_mapping))
+    df['matched_away_team'] = df['away_team'].apply(lambda x: find_standardized_name(x, team_mapping))
 
     # Merge average scoring data into the odds data based on matched team names
     df = pd.merge(df, df_points_for, left_on='matched_home_team', right_on='Team', how='left')
     df = pd.merge(df, df_points_for, left_on='matched_away_team', right_on='Team', how='left', suffixes=('_home', '_away'))
 
     # Match team names in odds data with average opponent points against data
-    df['matched_home_team_against'] = df['home_team'].apply(lambda x: find_best_match(x, df_points_against['Team']))
-    df['matched_away_team_against'] = df['away_team'].apply(lambda x: find_best_match(x, df_points_against['Team']))
+    df['matched_home_team_against'] = df['home_team'].apply(lambda x: find_standardized_name(x, team_mapping))
+    df['matched_away_team_against'] = df['away_team'].apply(lambda x: find_standardized_name(x, team_mapping))
 
     # Merge average opponent points against data into the odds data based on matched team names
     df = pd.merge(df, df_points_against, left_on='matched_home_team_against', right_on='Team', how='left',
@@ -89,61 +105,101 @@ if response.status_code == 200:
     df = pd.merge(df, df_points_against, left_on='matched_away_team_against', right_on='Team', how='left',
                   suffixes=('_home_against', '_away_against'))
 
-   # Drop unnecessary columns
-columns_to_drop = ['Rank_home', '2022_home', 'Rank_away', '2022_away', 'Rank_home_against', '2022_home_against',
-                   'Rank_away_against', '2022_away_against']
+    # Drop unnecessary columns
+    columns_to_drop = ['Rank_home', '2022_home', 'Rank_away', '2022_away', 'Rank_home_against', '2022_home_against',
+                       'Rank_away_against', '2022_away_against']
+    df.drop(columns_to_drop, axis=1, inplace=True)
 
-df.drop(columns_to_drop, axis=1, inplace=True)
+    # Filter out rows where team match was not found
+    df = df.dropna(subset=['matched_home_team', 'matched_away_team', 'matched_home_team_against', 'matched_away_team_against'])
+
+    # Display the combined DataFrame
+    table = tabulate(df, headers='keys', tablefmt='pretty')
+    print(table)
+
+    # FIND THE VARIANCE BETWEEN LINE AND PREDICTED FINAL SCORE
+
+    # ... (your existing code)
+
+    # Extract the relevant columns for prediction
+    columns_for_home_team = ['2023_home', '2023_away']
+    columns_for_away_team = ['2023_home_against', '2023_away_against']
+
+    # Define the feature matrices for home and away teams
+    X_home_team = df[columns_for_home_team].values.reshape(-1, len(columns_for_home_team))
+    X_away_team = df[columns_for_away_team].values.reshape(-1, len(columns_for_away_team))
+
+    # Combine feature matrices and target variable for dropping missing values
+    columns_to_drop_na = columns_for_home_team + columns_for_away_team + ['point']
+    df_combined = df[columns_to_drop_na]
+
+   # Drop rows with missing values
+    df_combined = df_combined.dropna()
+
+    # Reset the index
+    df_combined = df_combined.reset_index(drop=True)
+
+    # Separate back into feature matrices and target variable
+    X_home_team = df_combined[columns_for_home_team].values.reshape(-1, len(columns_for_home_team))
+    X_away_team = df_combined[columns_for_away_team].values.reshape(-1, len(columns_for_away_team))
+    y = df_combined['point'].values
+
+    # Initialize separate linear regression models for home and away teams
+    model_home_team = LinearRegression()
+    model_away_team = LinearRegression()
+
+    # Fit the models
+    model_home_team.fit(X_home_team, y)
+    model_away_team.fit(X_away_team, y)
+
+    # Predict scores for each team
+    predicted_home_scores = model_home_team.predict(X_home_team)
+    predicted_away_scores = model_away_team.predict(X_away_team)
+
+    # Create a new DataFrame for predictions
+    prediction_df = pd.DataFrame({
+        'Predicted_Score_Team_Home': predicted_home_scores,
+        'Predicted_Score_Team_Away': predicted_away_scores
+    })
+
+    # Concatenate the prediction DataFrame with the original DataFrame
+    df = pd.concat([df, prediction_df], axis=1)
+
+    # Calculate an average predicted score for both teams
+    df['Predicted_Average_Score'] = (df['Predicted_Score_Team_Home'] + df['Predicted_Score_Team_Away']) / 2
+
+    # Display the predicted scores
+    print(tabulate(df[['home_team', 'away_team', 'Predicted_Average_Score', 'point']], headers='keys', tablefmt='pretty'))
+
+    # Calculate variance between predicted and actual points
+    df['Variance'] = df['Predicted_Average_Score'] - df['point']
+
+    # Add a column indicating over or under the point metric
+    df['Over_Under'] = np.where(df['Variance'] > 0, 'Over', 'Under')
+
+    # Get current UTC time
+current_utc_time = datetime.utcnow().replace(tzinfo=timezone.utc)
+
+# Convert UTC time to CST
+cst_timezone = pytz.timezone('US/Central')
+current_cst_time = current_utc_time.astimezone(cst_timezone)
+
+# Format the time as a string
+formatted_time_utc = current_utc_time.strftime("%Y-%m-%dT%H:%M:%SZ")
+formatted_time_cst = current_cst_time.strftime("%Y-%m-%d %H:%M:%S CST")
+
+# Add current UTC date time to the dataframe
+df['Current_UTC_Time'] = formatted_time_utc
+
+# Convert 'commence_time' column to datetime
+df['commence_time'] = pd.to_datetime(df['commence_time'], utc=True)
+
+# Include results with more than 5-point variance either direction
+filtered_df = df[(np.abs(df['Variance']) > 5) & (df['commence_time'] > current_utc_time)]
+
+# Convert 'commence_time' column to CST
+filtered_df = filtered_df.copy()
+filtered_df.loc[:, 'Commence_Time_CST'] = filtered_df['commence_time'].dt.tz_convert(cst_timezone).dt.strftime("%Y-%m-%d %H:%M:%S CST")
 
 
-# Filter out rows where team match was not found
-df = df.dropna(subset=['matched_home_team', 'matched_away_team','matched_home_team_against', 'matched_away_team_against'])
-
-# Display the combined DataFrame
-table = tabulate(df, headers='keys', tablefmt='pretty')
-print(table)
-
-# FIND THE VARIANCE BETWEEN LINE AND PREDICTED FINAL SCORE
-
-
-
-# ... (your existing code)
-
-
-# Extract the relevant columns for prediction
-columns_for_home_team = ['2023_home', '2023_away']
-columns_for_away_team = ['2023_home_against', '2023_away_against']
-
-# Define the feature matrices for home and away teams
-X_home_team = df[columns_for_home_team].values.reshape(-1, len(columns_for_home_team))
-X_away_team = df[columns_for_away_team].values.reshape(-1, len(columns_for_away_team))
-
-# Initialize separate linear regression models for home and away teams
-model_home_team = LinearRegression()
-model_away_team = LinearRegression()
-
-# Fit the models
-model_home_team.fit(X_home_team, df['point'])
-model_away_team.fit(X_away_team, df['point'])
-
-# Predict scores for each team
-df['Predicted_Score_Team_Home'] = model_home_team.predict(X_home_team)
-df['Predicted_Score_Team_Away'] = model_away_team.predict(X_away_team)
-
-# Calculate an average predicted score for both teams
-df['Predicted_Average_Score'] = (df['Predicted_Score_Team_Home'] + df['Predicted_Score_Team_Away']) / 2
-
-# Display the predicted scores
-print(tabulate(df[['home_team', 'away_team', 'Predicted_Average_Score', 'point']], headers='keys', tablefmt='pretty'))
-
-# Calculate variance between predicted and actual points
-df['Variance'] = df['Predicted_Average_Score'] - df['point']
-
-# Add a column indicating over or under the point metric
-df['Over_Under'] = np.where(df['Variance'] > 0, 'Over', 'Under')
-
-# Filter results with more than 5-point variance
-filtered_df = df[np.abs(df['Variance']) > 5]
-
-# Display filtered variance information with over/under column
-print(tabulate(filtered_df[['home_team', 'away_team', 'Variance', 'Over_Under']], headers='keys', tablefmt='pretty'))
+print(tabulate(filtered_df[['home_team', 'away_team', 'Variance', 'Over_Under', 'Commence_Time_CST']], headers='keys', tablefmt='pretty'))
