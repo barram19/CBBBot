@@ -1,11 +1,4 @@
-try:
-    from fuzzywuzzy import process
-except ImportError:
-    !pip install fuzzywuzzy
-    from fuzzywuzzy import process
-
-!pip install pandas
-
+from fuzzywuzzy import process
 import numpy as np
 from sklearn.linear_model import LinearRegression
 import requests
@@ -119,8 +112,6 @@ if response.status_code == 200:
 
     # FIND THE VARIANCE BETWEEN LINE AND PREDICTED FINAL SCORE
 
-    # ... (your existing code)
-
     # Extract the relevant columns for prediction
     columns_for_home_team = ['2023_home', '2023_away']
     columns_for_away_team = ['2023_home_against', '2023_away_against']
@@ -170,14 +161,15 @@ if response.status_code == 200:
 
     # Display the predicted scores
     print(tabulate(df[['home_team', 'away_team', 'Predicted_Average_Score', 'point']], headers='keys', tablefmt='pretty'))
+    
 
-    # Calculate variance between predicted and actual points
-    df['Variance'] = df['Predicted_Average_Score'] - df['point']
+# Calculate variance between predicted and actual points
+df['Variance'] = df['Predicted_Average_Score'] - df['point']
 
-    # Add a column indicating over or under the point metric
-    df['Over_Under'] = np.where(df['Variance'] > 0, 'Over', 'Under')
+# Add a column indicating over or under the point metric
+df['Over_Under'] = np.where(df['Variance'] > 0, 'Over', 'Under')
 
-    # Get current UTC time
+# Get current UTC time
 current_utc_time = datetime.utcnow().replace(tzinfo=timezone.utc)
 
 # Convert UTC time to CST
@@ -195,11 +187,69 @@ df['Current_UTC_Time'] = formatted_time_utc
 df['commence_time'] = pd.to_datetime(df['commence_time'], utc=True)
 
 # Include results with more than 5-point variance either direction
-filtered_df = df[(np.abs(df['Variance']) > 5) & (df['commence_time'] > current_utc_time)]
+filtered_df = df[(np.abs(df['Variance']) > 5) & (df['commence_time'] > current_utc_time)].copy()
 
 # Convert 'commence_time' column to CST
-filtered_df = filtered_df.copy()
-filtered_df.loc[:, 'Commence_Time_CST'] = filtered_df['commence_time'].dt.tz_convert(cst_timezone).dt.strftime("%Y-%m-%d %H:%M:%S CST")
+filtered_df['Commence_Time_CST'] = filtered_df['commence_time'].dt.tz_convert(cst_timezone).dt.strftime("%Y-%m-%d %H:%M:%S CST")
+
+# Display the filtered DataFrame with Predicted_Average_Score
+print(tabulate(filtered_df[['home_team', 'away_team', 'Predicted_Average_Score', 'point', 'Variance', 'Over_Under', 'Commence_Time_CST']], headers='keys', tablefmt='pretty'))
 
 
-print(tabulate(filtered_df[['home_team', 'away_team', 'Variance', 'Over_Under', 'Commence_Time_CST']], headers='keys', tablefmt='pretty'))
+
+import gspread
+from oauth2client.service_account import ServiceAccountCredentials
+
+# Set up Google Sheets API credentials
+credentials_info = {
+    "type": "service_account",
+    "project_id": "PROJECTIDHERE",
+    "private_key_id": "PRIVATEKEYIDHERE",
+    "private_key": "PRIVATEKEYHERE"
+    "client_email": "SERVICEACCOUNTEMAILHERE",
+    "client_id": "CLIENTIDHERE",
+    "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+    "token_uri": "https://oauth2.googleapis.com/token",
+    "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+    "client_x509_cert_url": "CLIENTCERTHERE",
+    "universe_domain": "googleapis.com"
+}
+
+# Set up Google Sheets API credentials
+scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+creds = ServiceAccountCredentials.from_json_keyfile_dict(credentials_info, scope)
+client = gspread.authorize(creds)
+
+# Open the Google Sheet by title
+spreadsheet_title = "INSERTSPREADSHEETTITLEHERE"
+spreadsheet = client.open(spreadsheet_title)
+
+# Access the specific worksheet within the spreadsheet
+worksheet_title = "WORKSHEETTITLEHERE"
+worksheet = spreadsheet.worksheet(worksheet_title)
+
+# Convert filtered_df to a list of dictionaries
+new_data = filtered_df[['home_team', 'away_team', 'Predicted_Average_Score', 'point', 'Variance', 'Over_Under', 'Commence_Time_CST']].to_dict(orient='records')
+
+# Load existing data from the worksheet
+existing_data = worksheet.get_all_records()
+
+# Convert filtered_df to a list of dictionaries
+new_data = filtered_df[['home_team', 'away_team', 'Predicted_Average_Score', 'point', 'Variance', 'Over_Under', 'Commence_Time_CST']].to_dict(orient='records')
+
+# Check for duplicate entries based on home team, away team, and commence date
+for entry in new_data:
+    # Convert commence_time to string for comparison
+    entry['Commence_Time_CST'] = str(entry['Commence_Time_CST'])
+    
+    # Check if the entry already exists
+    is_duplicate = any(
+        (entry['home_team'] == row['home_team'] and
+         entry['away_team'] == row['away_team'] and
+         entry['Commence_Time_CST'] == str(row['Commence_Time_CST']))
+        for row in existing_data
+    )
+    
+    # If not a duplicate, append the new entry to the worksheet
+    if not is_duplicate:
+        worksheet.append_row([entry['home_team'], entry['away_team'], entry['point'], entry['Predicted_Average_Score'],  entry['Variance'], entry['Over_Under'], entry['Commence_Time_CST']])
