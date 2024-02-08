@@ -1,6 +1,7 @@
 from fuzzywuzzy import process
 import numpy as np
 from sklearn.linear_model import LinearRegression
+from sklearn.ensemble import GradientBoostingRegressor
 import requests
 import xgboost as xgb
 import pandas as pd
@@ -116,36 +117,22 @@ if response.status_code == 200:
     columns_for_home_team = ['2023_home', '2023_away']
     columns_for_away_team = ['2023_home_against', '2023_away_against']
 
-    # Define the feature matrices for home and away teams
-    X_home_team = df[columns_for_home_team].values.reshape(-1, len(columns_for_home_team))
-    X_away_team = df[columns_for_away_team].values.reshape(-1, len(columns_for_away_team))
+    # Define the gradient boosting models for home and away teams
+    model_home_team = GradientBoostingRegressor()
+    model_away_team = GradientBoostingRegressor()
 
-    # Combine feature matrices and target variable for dropping missing values
-    columns_to_drop_na = columns_for_home_team + columns_for_away_team + ['point']
-    df_combined = df[columns_to_drop_na]
-
-   # Drop rows with missing values
-    df_combined = df_combined.dropna()
-
-    # Reset the index
-    df_combined = df_combined.reset_index(drop=True)
-
-    # Separate back into feature matrices and target variable
-    X_home_team = df_combined[columns_for_home_team].values.reshape(-1, len(columns_for_home_team))
-    X_away_team = df_combined[columns_for_away_team].values.reshape(-1, len(columns_for_away_team))
-    y = df_combined['point'].values
-
-    # Initialize separate linear regression models for home and away teams
-    model_home_team = LinearRegression()
-    model_away_team = LinearRegression()
-
-    # Fit the models
+    # Fit the gradient boosting models
     model_home_team.fit(X_home_team, y)
     model_away_team.fit(X_away_team, y)
 
-    # Predict scores for each team
+    # Predict scores for each team using gradient boosting models
     predicted_home_scores = model_home_team.predict(X_home_team)
     predicted_away_scores = model_away_team.predict(X_away_team)
+
+    # Ensure lengths of predicted scores are consistent
+    min_len = min(len(predicted_home_scores), len(predicted_away_scores))
+    predicted_home_scores = predicted_home_scores[:min_len]
+    predicted_away_scores = predicted_away_scores[:min_len]
 
     # Create a new DataFrame for predictions
     prediction_df = pd.DataFrame({
@@ -161,7 +148,8 @@ if response.status_code == 200:
 
     # Display the predicted scores
     print(tabulate(df[['home_team', 'away_team', 'Predicted_Average_Score', 'point']], headers='keys', tablefmt='pretty'))
-    
+
+
 
 # Calculate variance between predicted and actual points
 df['Variance'] = df['Predicted_Average_Score'] - df['point']
@@ -187,7 +175,7 @@ df['Current_UTC_Time'] = formatted_time_utc
 df['commence_time'] = pd.to_datetime(df['commence_time'], utc=True)
 
 # Include results with more than 5-point variance either direction
-filtered_df = df[(np.abs(df['Variance']) > 5) & (df['commence_time'] > current_utc_time)].copy()
+filtered_df = df[(np.abs(df['Variance']) > 10) & (df['commence_time'] > current_utc_time)].copy()
 
 # Convert 'commence_time' column to CST
 filtered_df['Commence_Time_CST'] = filtered_df['commence_time'].dt.tz_convert(cst_timezone).dt.strftime("%Y-%m-%d %H:%M:%S CST")
@@ -197,21 +185,24 @@ print(tabulate(filtered_df[['home_team', 'away_team', 'Predicted_Average_Score',
 
 
 
+import pandas as pd
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
+import requests
+
 
 # Set up Google Sheets API credentials
 credentials_info = {
     "type": "service_account",
-    "project_id": "PROJECTIDHERE",
-    "private_key_id": "PRIVATEKEYIDHERE",
-    "private_key": "PRIVATEKEYHERE"
-    "client_email": "SERVICEACCOUNTEMAILHERE",
-    "client_id": "CLIENTIDHERE",
+    "project_id": "cbbbot-413503",
+    "private_key_id": "215d90539c7064779207f36f2c7efc3b8fe5205a",
+    "private_key": "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC1LY0tVwJVpwUL\nG2gknmv75prag86+VUplFTONLtVRvDLfLxIJNv848tS4vkg3/8iui744OlqjGsq7\ncppqP804qrIv+oWeEAj3K8UM12yiqRSnW81OHYs8LalcLdYF8FxEkwNHdrHx+wr3\nZeHiDTn3K40hNlszNhy/azaqmKt19iDjts85FQKxW0CvdMs9CRy89BgJSTR6O0j9\ni5e9xMiwbMBvhOezsqIdLKQECh5l0X/lZFo0URhXHT9K11myYtWWrHvfBVip8h5V\nm0mCYVLVyBv0FIDX2I+nx9TVdpEUAKLfHF6nBSEaQ1cjl4Xo69jsAxodz/muccts\n5Ybtsol3AgMBAAECggEAKB8TQXQgNzmKW2BRWrKedSUnK7a+pNWcaPAd/2jcooIL\nvfLdip7cPA9CXjr9ITGKjmSx1h/ODIqVVJdXbKn+V0sttIRE7LDeW2Yc9/AIxait\nwzYILAFM4SG3fItF9wC4XhM0SbIWS+DtF8Y/FGEbcgn58d3oqlmUWity6qpuZeug\nxkqGB+BZoIFUtdETcOaFwiRh4leQRfvK6kAZ/MOljRqFEzo++bRXQyrvYQX8sSNn\nGj68rzYC5YtwxSAWBOHu58tP5tIEhdK5oNI69SbDWY7iJpmBc3J4sE1fDK18pm79\naUfRHtSIoc8p8J7fm0u4XwZvrZfgYhp83KQHmXuqAQKBgQDozlFEL5mQC2e+17p/\nbbSNeMhpHagHkVItV6uA0qQwyv1dRvu+4XTIu7KC24/q6z2B0QmUsWE4rU0qXP4H\nwxfVTV6s9t1EZqTJ0usJsgxS+nJshRxahF/ggct3zbihOcDAVl8DfwNsnCsE+ZJc\nmwuuF7x5J+Q51/ArpbUEQjlfAQKBgQDHOnglnw6oNDIbAKwlEwNfJuwOwoolLJLx\nB88Ls8OKSHYRyt141ZHiNYiwoyuWZeu1cmSQB6Ss2igGqqC6/sx+0XnXaB0ngp98\nfUIPYxQqfEWn/7BNwDgstZY1KhgM9XkyqjuYCTJhq3MLap5od77nxNPEOJ+HtbeQ\n3t0JaGdgdwKBgGIRXyxg/Mgv9cDvsTEyrmcV5R5ajsi5T6uoDafTk7S2HaqoVy3e\nXUqdvqHfCa4E8ED6JJYNbo3oeuQIjj4I0cZZtDMaPrUso+gcwEOyS/y8YW0TWZFL\nx/OT2XkbINZRtL+Q4q9fVrruwjRzSVNXQMFSYGONCVfQfex0/l7P4skBAoGAWBdg\nXLIx1uoNZacsdtArY31gTz5xuvI0nuLnB7OauKBFpKRgvTch5DXrlL7xXPT//iDw\nmkbm548mt5vmqghT/5c8GqTsjzXQs0jnVspmdkqwuhHysM5XiF1aZ3OPYtt/lYl0\nBEu8vTcEDX49QNAB15VOVar7zxPocOQ6NBi37Q0CgYEAuMdjiPdjB9g51rzZzthd\n4j92CEv+k+a/mCHRLern/1DAraK9lxYEwYq2iIOx5MM+AZ6IVEuNZpoteQqPSwbR\ntDthjTQ13/InyPV+RhDv6fsCsKydAGiYAu5dB8RiJSge5+opARLS4uCD1NiSHU7D\nv6Ir9SRw6lCVRSeJzIH1gp4=\n-----END PRIVATE KEY-----\n",
+    "client_email": "cbbbot@cbbbot-413503.iam.gserviceaccount.com",
+    "client_id": "108090732316867851436",
     "auth_uri": "https://accounts.google.com/o/oauth2/auth",
     "token_uri": "https://oauth2.googleapis.com/token",
     "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
-    "client_x509_cert_url": "CLIENTCERTHERE",
+    "client_x509_cert_url": "https://www.googleapis.com/robot/v1/metadata/x509/cbbbot%40cbbbot-413503.iam.gserviceaccount.com",
     "universe_domain": "googleapis.com"
 }
 
@@ -221,35 +212,96 @@ creds = ServiceAccountCredentials.from_json_keyfile_dict(credentials_info, scope
 client = gspread.authorize(creds)
 
 # Open the Google Sheet by title
-spreadsheet_title = "INSERTSPREADSHEETTITLEHERE"
+spreadsheet_title = "CBBTracking"
 spreadsheet = client.open(spreadsheet_title)
 
 # Access the specific worksheet within the spreadsheet
-worksheet_title = "WORKSHEETTITLEHERE"
+worksheet_title = "Sheet3"
 worksheet = spreadsheet.worksheet(worksheet_title)
 
 # Convert filtered_df to a list of dictionaries
-new_data = filtered_df[['home_team', 'away_team', 'Predicted_Average_Score', 'point', 'Variance', 'Over_Under', 'Commence_Time_CST']].to_dict(orient='records')
+new_data = filtered_df[['home_team', 'away_team', 'Predicted_Average_Score', 'point', 'Variance', 'Over_Under', 'Commence_Time_CST', 'commence_time']].to_dict(orient='records')
 
 # Load existing data from the worksheet
 existing_data = worksheet.get_all_records()
-
-# Convert filtered_df to a list of dictionaries
-new_data = filtered_df[['home_team', 'away_team', 'Predicted_Average_Score', 'point', 'Variance', 'Over_Under', 'Commence_Time_CST']].to_dict(orient='records')
 
 # Check for duplicate entries based on home team, away team, and commence date
 for entry in new_data:
     # Convert commence_time to string for comparison
     entry['Commence_Time_CST'] = str(entry['Commence_Time_CST'])
-    
+    entry['commence_time'] = entry['commence_time'].strftime("%Y-%m-%dT%H:%M:%SZ")  # Format with "T" and "Z"
+
     # Check if the entry already exists
     is_duplicate = any(
         (entry['home_team'] == row['home_team'] and
          entry['away_team'] == row['away_team'] and
-         entry['Commence_Time_CST'] == str(row['Commence_Time_CST']))
+         entry['Commence_Time_CST'] == str(row['Commence_Time_CST']) and
+         entry['commence_time'] == row['commence_time'])
         for row in existing_data
     )
-    
+
     # If not a duplicate, append the new entry to the worksheet
     if not is_duplicate:
-        worksheet.append_row([entry['home_team'], entry['away_team'], entry['point'], entry['Predicted_Average_Score'],  entry['Variance'], entry['Over_Under'], entry['Commence_Time_CST']])
+        worksheet.append_row([entry['home_team'], entry['away_team'], entry['point'], entry['Predicted_Average_Score'],  entry['Variance'], entry['Over_Under'], entry['Commence_Time_CST'], entry['commence_time']])
+
+# Set API endpoint URL for historical outcomes
+historical_url = 'https://api.the-odds-api.com/v4/sports/basketball_ncaab/scores/?daysFrom=3&apiKey=00ab27442da4a2b1f8460c5c70d0b3d8'
+
+# Make the request and get the response data for historical outcomes
+historical_response = requests.get(historical_url, headers=headers)
+
+if historical_response.status_code == 200:
+    historical_data = historical_response.json()
+else:
+    print(f"Error fetching historical outcomes. Status code: {historical_response.status_code}")
+
+from datetime import datetime
+
+# Iterate through the existing data in the Google Sheet
+for i, row in enumerate(existing_data, start=2):  # Start from row 2 assuming headers are in row 1
+    home_team = row['home_team']
+    away_team = row['away_team']
+    commence_time_cst = row['commence_time']
+
+    # Check if final_score and over_under_result are already present
+    if 'final_score' not in row or 'over_under_result' not in row:
+        # Extract the date part of the commence time from the Google Sheet row
+        commence_date_sheet = datetime.strptime(commence_time_cst, "%Y-%m-%dT%H:%M:%SZ").date()
+
+        # Find historical outcome for the corresponding game
+        relevant_outcome = None
+        for outcome in historical_data:
+            # Check if the game is completed
+            if outcome.get('completed', False):  # Only proceed if 'completed' is True
+                # Extract the date part of the commence time from the API response
+                commence_date_api = datetime.strptime(outcome['commence_time'], "%Y-%m-%dT%H:%M:%SZ").date()
+
+                # Compare only the date parts of the commence times
+                if (outcome.get('home_team') == home_team and
+                    outcome.get('away_team') == away_team and
+                    commence_date_sheet == commence_date_api):
+                    relevant_outcome = outcome
+                    break
+
+        # If a relevant historical outcome is found, update the Google Sheet
+        if relevant_outcome:
+            # Check if 'scores' key is available and not None
+            if 'scores' in relevant_outcome and relevant_outcome['scores'] is not None:
+                # Access the scores of home and away teams
+                home_score = next((item['score'] for item in relevant_outcome['scores'] if item['name'] == home_team), None)
+                away_score = next((item['score'] for item in relevant_outcome['scores'] if item['name'] == away_team), None)
+
+                if home_score is not None and away_score is not None:
+                    final_score = int(home_score) + int(away_score)
+                    point_entered = int(row['point'])  # Assuming 'point' column is available in the Google Sheet
+                    over_under_result = 'Over' if final_score > point_entered else 'Under'
+
+                    # Update the final score and result in the Google Sheet
+                    worksheet.update_cell(i, 9, final_score)  # Assuming 'Variance' column is in the 9th position
+                    worksheet.update_cell(i, 10, over_under_result)  # Assuming 'Over_Under' column is in the 10th position
+                else:
+                    print(f"Scores not available for game: {home_team} vs {away_team} at {commence_time_cst}")
+            else:
+                print(f"No scores available for game: {home_team} vs {away_team} at {commence_time_cst}")
+        else:
+            print(f"No historical outcome found for game: {home_team} vs {away_team} at {commence_time_cst}")
